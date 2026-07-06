@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cody: Codebase Explorer</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Vis.js Graph Network -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="app-header">
+            <div class="logo">
+                <img src="{{ url_for('static', filename='logo.svg') }}" class="brand-logo" alt="Cody Logo">
+                <h1>Cody <span>Codebase Walkthrough</span></h1>
+            </div>
+            <div class="repo-analyzer-box">
+                <input type="text" id="repo-url-input" placeholder="Enter GitHub repository URL..." value="https://github.com/sahilgupta2006/netsec">
+                <button id="analyze-btn" class="primary-btn">
+                    <i class="fa-solid fa-magnifying-glass"></i> Analyze
+                </button>
+                <div id="status-indicator" class="status-indicator idle">
+                    <span class="dot"></span> <span class="label">Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Workspace -->
+        <main class="app-main">
+            <!-- Left Side: Interactive Force Graph Network -->
+            <section class="graph-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-network-wired"></i> Dependency Map</h2>
+                    <div class="header-controls">
+                        <label class="toggle-container">
+                            <input type="checkbox" id="toggle-library-nodes">
+                            <span class="toggle-label"><i class="fa-solid fa-boxes-packing"></i> Show Library Nodes</span>
+                        </label>
+                    </div>
+                    <span class="help-text"><i class="fa-solid fa-circle-info"></i> Click nodes to jump to that function</span>
+                </div>
+                <div id="network-canvas" class="canvas-container">
+                    <div id="canvas-loader" class="loader-overlay hidden">
+                        <div class="spinner"></div>
+                        <p>Analyzing codebase... this might take a moment.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Side: Node Details and Explanations -->
+            <section class="details-panel" id="details-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-code"></i> Code Inspector</h2>
+                </div>
+                
+                <div id="no-selection-message" class="empty-state">
+                    <i class="fa-solid fa-code-branch empty-icon"></i>
+                    <h3>No Entity Selected</h3>
+                    <p>Click a node in the dependency graph or press Next below to start the walkthrough walkthrough.</p>
+                </div>
+
+                <div id="node-details-container" class="details-content hidden">
+                    <div class="details-card-header">
+                        <span id="node-type" class="badge type-badge">FUNCTION</span>
+                        <h3 id="node-name">run_sniffer</h3>
+                        <div id="node-file-box" class="file-box">
+                            <i class="fa-regular fa-file-code"></i> 
+                            <a href="#" id="node-file-link" target="_blank" title="Click to open local file">sniffer.py</a>
+                            <span id="node-lines">(Lines 10-45)</span>
+                        </div>
+                        <div id="node-scope" class="scope-text">Scope: module_name</div>
+                    </div>
+
+                    <div class="section-title">
+                        <i class="fa-solid fa-sparkles text-accent"></i> LLM Plain-English Explanation
+                    </div>
+                    <div class="explanation-box">
+                        <div id="explanation-loader" class="mini-loader hidden">
+                            <div class="spinner-small"></div> Generating explanation via qwen2.5-coder...
+                        </div>
+                        <p id="node-explanation">Explanation text goes here.</p>
+                    </div>
+
+                    <div class="section-title"><i class="fa-solid fa-terminal"></i> Source Code</div>
+                    <div class="code-container">
+                        <pre><code id="node-code-block" class="language-python">def run_sniffer():
+    print("Capturing...")</code></pre>
+                    </div>
+
+                    <div class="section-title"><i class="fa-solid fa-right-from-bracket"></i> Outbound Call Relations</div>
+                    <div class="relations-box">
+                        <ul id="outbound-calls-list" class="calls-list">
+                            <!-- Populated dynamically -->
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Walkthrough Controls Bar -->
+        <footer class="app-footer">
+            <div class="walkthrough-info">
+                <div class="step-label">Current Step:</div>
+                <div id="step-number" class="step-number">Step 0 / 0</div>
+            </div>
+            <div class="walkthrough-controls">
+                <button id="go-back-btn" class="nav-btn" disabled>
+                    <i class="fa-solid fa-arrow-left"></i> Go Back
+                </button>
+                <button id="prev-step-btn" class="nav-btn" disabled>
+                    <i class="fa-solid fa-chevron-left"></i> Previous
+                </button>
+                <button id="restart-walk-btn" class="nav-btn">
+                    <i class="fa-solid fa-rotate-left"></i> Restart Walk
+                </button>
+                <button id="next-step-btn" class="nav-btn primary-btn" disabled>
+                    Next Step <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
+            <div class="walkthrough-status">
+                <span id="walkthrough-start-node" class="node-indicator">Starting at: None</span>
+            </div>
+        </footer>
+
+
+    <!-- Main Javascript Engine -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

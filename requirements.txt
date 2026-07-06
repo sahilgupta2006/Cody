@@ -1,0 +1,4 @@
+flask
+ollama
+tree-sitter
+tree-sitter-python
