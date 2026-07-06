@@ -3,7 +3,7 @@ import re
 import subprocess
 from collections import deque, defaultdict
 import ollama
-from cody.parser import Node, resolve_imports_for_file, get_parser, LANG_MAP, parse_regex_symbols
+from cody.parser import Node, resolve_imports_for_file, get_parser, LANG_MAP, parse_regex_symbols, get_language_parser, LANG_CONFIGS, get_node_name, extract_call_name
 
 parser = get_parser()
 SUPPORTED_EXTS = [".py"] + list(LANG_MAP.keys())
@@ -47,9 +47,10 @@ def make_nodes(repo_dir="cloned_repo"):
                     file_imports[filename] = {}  # Empty local imports map for other languages
                 
                 # 2. Parse nodes
-                if ext == ".py":
-                    # Tree-sitter Python parser
-                    tree = parser.parse(code_bytes)
+                lang_parser = get_language_parser(ext)
+                if lang_parser and ext in LANG_CONFIGS:
+                    config = LANG_CONFIGS[ext]
+                    tree = lang_parser.parse(code_bytes)
                     root = tree.root_node
 
                     q = deque()
@@ -58,11 +59,14 @@ def make_nodes(repo_dir="cloned_repo"):
                     while len(q):
                         r, parent = q.popleft()
 
-                        if r.type == "function_definition" or r.type == "class_definition":
+                        is_func = r.type in config["functions"]
+                        is_class = r.type in config["classes"]
+
+                        if is_func or is_class:
                             sp = r.start_point
                             ep = r.end_point
-                            name = r.child_by_field_name("name").text.decode('utf-8')
-                            node_type = r.type
+                            name = get_node_name(r)
+                            node_type = "function_definition" if is_func else "class_definition"
                             filepath = filename
                             hierarchical_name = parent
                             
@@ -92,7 +96,7 @@ def make_nodes(repo_dir="cloned_repo"):
                         for child in r.children:
                             q.append((child, parent))
                 else:
-                    # Multi-language Regex parser
+                    # Multi-language Regex parser fallback
                     code_str = code_bytes.decode('utf-8', errors='ignore')
                     parsed_nodes = parse_regex_symbols(filename, code_str)
                     
@@ -239,9 +243,10 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                 with open(filename, "rb") as f:
                     code_bytes = f.read()
 
-                if ext == ".py":
-                    # Tree-sitter Python call analysis
-                    tree = parser.parse(code_bytes)
+                lang_parser = get_language_parser(ext)
+                if lang_parser and ext in LANG_CONFIGS:
+                    config = LANG_CONFIGS[ext]
+                    tree = lang_parser.parse(code_bytes)
                     root = tree.root_node
 
                     q = deque()
@@ -250,28 +255,28 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                     while len(q):
                         r, parent = q.popleft()
 
-                        if r.type == "function_definition" or r.type == "class_definition":
-                            name = r.child_by_field_name("name").text.decode('utf-8')
+                        is_func = r.type in config["functions"]
+                        is_class = r.type in config["classes"]
+
+                        if is_func or is_class:
+                            name = get_node_name(r)
                             parent = f"{parent}:{name}"
 
-                        elif r.type == "call":
+                        elif r.type in config["calls"]:
                             caller_id = scope_table.get((filename, parent))
                             if caller_id:
-                                func_node = r.child_by_field_name("function")
-                                to_name = None
-                                if func_node.type == "identifier":
-                                    to_name = func_node.text.decode('utf-8')
-                                elif func_node.type == "attribute":
-                                    to_name = func_node.child_by_field_name("attribute").text.decode('utf-8')
+                                to_name = extract_call_name(r, config)
 
                                 # 1. Resolve standard call
                                 if to_name:
                                     target_id = resolve_node_by_name(caller_id, to_name, name_node, nodes_table, file_imports, filename)
                                     if target_id:
-                                        edge_key = (caller_id, target_id, 'direct')
-                                        if edge_key not in added_edges:
-                                            adj_list[caller_id].append((target_id, 'direct'))
-                                            added_edges.add(edge_key)
+                                        # Skip self loops (recursive name clash prevention)
+                                        if target_id != caller_id:
+                                            edge_key = (caller_id, target_id, 'direct')
+                                            if edge_key not in added_edges:
+                                                adj_list[caller_id].append((target_id, 'direct'))
+                                                added_edges.add(edge_key)
                                     else:
                                         lib_entity = f"library_entity:{to_name}"
                                         edge_key = (caller_id, lib_entity, 'direct')
@@ -280,28 +285,29 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                                             added_edges.add(edge_key)
 
                                 # 2. Sniff dynamic dispatch
-                                callback_candidates = find_callback_candidates(r, name_node)
-                                if callback_candidates:
-                                    code_snippet = get_node_source(filename, r.start_byte, r.end_byte)
-                                    if code_snippet:
-                                        detected_name = detect_dynamic_dispatch(code_snippet)
-                                        if detected_name and detected_name in name_node:
-                                            target_id = resolve_node_by_name(caller_id, detected_name, name_node, nodes_table, file_imports, filename)
-                                            if target_id:
-                                                edge_type = 'callback'
-                                                snippet_upper = code_snippet.upper()
-                                                if "THREAD" in snippet_upper or "TARGET=" in snippet_upper or "PROCESS" in snippet_upper:
-                                                    edge_type = 'thread_target'
-                                                    
-                                                edge_key = (caller_id, target_id, edge_type)
-                                                if edge_key not in added_edges:
-                                                    adj_list[caller_id].append((target_id, edge_type))
-                                                    added_edges.add(edge_key)
+                                if ext == ".py":
+                                    callback_candidates = find_callback_candidates(r, name_node)
+                                    if callback_candidates:
+                                        code_snippet = get_node_source(filename, r.start_byte, r.end_byte)
+                                        if code_snippet:
+                                            detected_name = detect_dynamic_dispatch(code_snippet)
+                                            if detected_name and detected_name in name_node:
+                                                target_id = resolve_node_by_name(caller_id, detected_name, name_node, nodes_table, file_imports, filename)
+                                                if target_id and target_id != caller_id:
+                                                    edge_type = 'callback'
+                                                    snippet_upper = code_snippet.upper()
+                                                    if "THREAD" in snippet_upper or "TARGET=" in snippet_upper or "PROCESS" in snippet_upper:
+                                                        edge_type = 'thread_target'
+                                                        
+                                                    edge_key = (caller_id, target_id, edge_type)
+                                                    if edge_key not in added_edges:
+                                                        adj_list[caller_id].append((target_id, edge_type))
+                                                        added_edges.add(edge_key)
 
                         for child in r.children:
                             q.append((child, parent))
                 else:
-                    # Multi-language Regex Call analysis
+                    # Multi-language Regex Call analysis fallback
                     code_str = code_bytes.decode('utf-8', errors='ignore')
                     lines = code_str.splitlines()
                     
@@ -312,7 +318,6 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                         end_row = node.end[0]
                         body_lines = lines[start_row:end_row + 1]
                         
-                        # Regex to capture calls like: name(...)
                         call_pat = re.compile(r'([a-zA-Z0-9_$]+)\s*\(')
                         for line_idx, line in enumerate(body_lines):
                             if line_idx == 0:
@@ -320,12 +325,11 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                             
                             calls = call_pat.findall(line)
                             for to_name in calls:
-                                # Filter language keywords
                                 if to_name in ["if", "for", "while", "switch", "catch", "function", "fn", "func", "return", "import", "require", "console", "log", "print", "printf"]:
                                     continue
                                     
                                 target_id = resolve_node_by_name(caller_id, to_name, name_node, nodes_table, file_imports, filename)
-                                if target_id:
+                                if target_id and target_id != caller_id:
                                     edge_key = (caller_id, target_id, 'direct')
                                     if edge_key not in added_edges:
                                         adj_list[caller_id].append((target_id, 'direct'))

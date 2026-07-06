@@ -1,10 +1,11 @@
 import os
 import re
+import importlib
 from dataclasses import dataclass
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser
 
-# Initialize Tree-sitter language and parser
+# Initialize base Python parser
 PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
 
@@ -21,29 +22,222 @@ class Node:
     start_byte: int = 0
     end_byte: int = 0
 
+# Mapping of file extensions to their corresponding Tree-sitter modules
+LANG_BINDINGS = {
+    ".py": "tree_sitter_python",
+    ".rs": "tree_sitter_rust",
+    ".go": "tree_sitter_go",
+    ".java": "tree_sitter_java",
+    ".js": "tree_sitter_javascript",
+    ".jsx": "tree_sitter_javascript",
+    ".ts": "tree_sitter_typescript",
+    ".tsx": "tree_sitter_typescript",
+    ".cpp": "tree_sitter_cpp",
+    ".hpp": "tree_sitter_cpp",
+    ".h": "tree_sitter_cpp",
+    ".cc": "tree_sitter_cpp",
+    ".cs": "tree_sitter_c_sharp",
+}
+
+LANG_MAP = LANG_BINDINGS
+
+# Node types configurations for AST symbol extraction
+LANG_CONFIGS = {
+    ".py": {
+        "functions": {"function_definition"},
+        "classes": {"class_definition"},
+        "calls": {"call"},
+        "func_field": "function",
+        "member_fields": ["attribute"]
+    },
+    ".rs": {
+        "functions": {"function_item"},
+        "classes": {"struct_item", "enum_item", "impl_item", "trait_item"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".go": {
+        "functions": {"function_declaration", "method_declaration"},
+        "classes": {"type_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".java": {
+        "functions": {"method_declaration"},
+        "classes": {"class_declaration", "interface_declaration", "enum_declaration"},
+        "calls": {"method_invocation"},
+        "func_field": "name",
+        "member_fields": []
+    },
+    ".js": {
+        "functions": {"function_declaration", "method_definition", "generator_function_declaration"},
+        "classes": {"class_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["property"]
+    },
+    ".jsx": {
+        "functions": {"function_declaration", "method_definition", "generator_function_declaration"},
+        "classes": {"class_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["property"]
+    },
+    ".ts": {
+        "functions": {"function_declaration", "method_definition", "generator_function_declaration"},
+        "classes": {"class_declaration", "interface_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["property"]
+    },
+    ".tsx": {
+        "functions": {"function_declaration", "method_definition", "generator_function_declaration"},
+        "classes": {"class_declaration", "interface_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["property"]
+    },
+    ".cpp": {
+        "functions": {"function_definition"},
+        "classes": {"class_specifier", "struct_specifier", "namespace_definition"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".hpp": {
+        "functions": {"function_definition"},
+        "classes": {"class_specifier", "struct_specifier", "namespace_definition"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".cc": {
+        "functions": {"function_definition"},
+        "classes": {"class_specifier", "struct_specifier", "namespace_definition"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".h": {
+        "functions": {"function_definition"},
+        "classes": {"class_specifier", "struct_specifier", "namespace_definition"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["field"]
+    },
+    ".cs": {
+        "functions": {"method_declaration", "constructor_declaration"},
+        "classes": {"class_declaration", "interface_declaration", "struct_declaration", "enum_declaration"},
+        "calls": {"call_expression"},
+        "func_field": "function",
+        "member_fields": ["property"]
+    }
+}
+
+# Cache of dynamically loaded Tree-sitter parsers
+_parsers_cache = {}
+
+def get_language_parser(ext):
+    """
+    Dynamically loads the Tree-sitter binding for the given extension and returns a Parser.
+    """
+    if ext in _parsers_cache:
+        return _parsers_cache[ext]
+        
+    module_name = LANG_BINDINGS.get(ext)
+    if not module_name:
+        return None
+        
+    try:
+        mod = importlib.import_module(module_name)
+        lang = Language(mod.language())
+        p = Parser(lang)
+        _parsers_cache[ext] = p
+        return p
+    except Exception as e:
+        print(f"[WARN] Failed to load tree-sitter parser for {ext}: {e}")
+        return None
+
+def get_identifier_text(node):
+    """
+    Recursively scans for the first identifier/type_identifier in the subtree.
+    """
+    if node.type in ["identifier", "type_identifier", "type_name"]:
+        return node.text.decode('utf-8', errors='ignore')
+    for child in node.children:
+        res = get_identifier_text(child)
+        if res:
+            return res
+    return None
+
+def get_node_name(node):
+    """
+    Resolves the name of a function/class node in a language-agnostic way.
+    """
+    # 1. Try 'name' field
+    name_node = node.child_by_field_name("name")
+    if name_node:
+        return name_node.text.decode('utf-8', errors='ignore')
+        
+    # 2. Try 'declarator' field
+    decl_node = node.child_by_field_name("declarator")
+    if decl_node:
+        name = get_identifier_text(decl_node)
+        if name:
+            return name
+            
+    # 3. Fallback: Scan children directly
+    name = get_identifier_text(node)
+    if name:
+        return name
+        
+    return "anonymous"
+
+def get_last_identifier(node):
+    """
+    Finds the rightmost identifier (useful for member calls: x.y.z -> z).
+    """
+    if node.type in ["identifier", "type_identifier"]:
+        return node.text.decode('utf-8', errors='ignore')
+    for child in reversed(node.children):
+        res = get_last_identifier(child)
+        if res:
+            return res
+    return None
+
+def extract_call_name(call_node, config):
+    """
+    Extracts the name of the function being called from a call node.
+    """
+    func_field = config["func_field"]
+    func_node = call_node.child_by_field_name(func_field)
+    
+    if not func_node:
+        # Special fallback for Java method invocation (uses name child or identifier child)
+        if func_field == "name":
+            for child in call_node.children:
+                if child.type == "identifier":
+                    return child.text.decode('utf-8', errors='ignore')
+        return None
+        
+    if func_node.type in ["identifier", "type_identifier"]:
+        return func_node.text.decode('utf-8', errors='ignore')
+        
+    # Handle member/attribute calls (like bytes.is_empty)
+    for field_name in config["member_fields"]:
+        prop_node = func_node.child_by_field_name(field_name)
+        if prop_node:
+            return prop_node.text.decode('utf-8', errors='ignore')
+            
+    # Rightmost fallback
+    return get_last_identifier(func_node)
+
 def get_parser():
     return parser
 
-# File extensions mapping to language names
-LANG_MAP = {
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".go": "go",
-    ".rs": "rust",
-    ".java": "java",
-    ".cpp": "cpp",
-    ".hpp": "cpp",
-    ".h": "cpp",
-    ".cc": "cpp",
-    ".cs": "csharp",
-}
-
 def find_block_end(lines, start_idx):
-    """
-    Brace-counting boundary scanner to locate curly brace function block ends.
-    """
     brace_count = 0
     started = False
     for idx in range(start_idx, len(lines)):
@@ -60,19 +254,16 @@ def find_block_end(lines, start_idx):
 
 def parse_regex_symbols(filepath, code_str):
     """
-    Language-agnostic symbol parser for non-python files.
-    Extracts function and class definitions.
+    Language-agnostic symbol parser fallback for non-python files.
     """
     ext = os.path.splitext(filepath)[1].lower()
-    if ext not in LANG_MAP:
+    if ext not in LANG_BINDINGS:
         return []
         
     lines = code_str.splitlines()
     nodes = []
     
-    # Select regex patterns based on file extension
     if ext in [".js", ".jsx", ".ts", ".tsx"]:
-        # JS/TS: class, function, arrow const, or class method definitions
         pat = re.compile(
             r'(?:class\s+([a-zA-Z0-9_$]+))|'
             r'(?:function\s+([a-zA-Z0-9_$]+))|'
@@ -80,13 +271,10 @@ def parse_regex_symbols(filepath, code_str):
             r'^\s*(?:async\s+)?([a-zA-Z0-9_$]+)\s*\([^)]*\)\s*\{'
         )
     elif ext == ".go":
-        # Go: func and receiver methods
         pat = re.compile(r'func\s+(?:\([^)]+\)\s+)?([a-zA-Z0-9_$]+)\s*\(')
     elif ext == ".rs":
-        # Rust: fn or impl blocks
         pat = re.compile(r'(?:fn\s+([a-zA-Z0-9_$]+)|impl(?:\s*<[^>]+>)?\s+([a-zA-Z0-9_$]+))')
     elif ext in [".java", ".cpp", ".hpp", ".cc", ".h", ".cs"]:
-        # C++/Java/C#: class names and typical method signatures
         pat = re.compile(
             r'(?:class\s+([a-zA-Z0-9_$]+))|'
             r'(?:(?:public|private|protected|static|virtual|override|async|\s)+\s+([a-zA-Z0-9_$]+)\s*\([^)]*\)\s*(?:throws\s+[^{]+)?\{)'
@@ -125,10 +313,6 @@ def parse_regex_symbols(filepath, code_str):
     return nodes
 
 def resolve_imports_for_file(filepath, code, repo_dir):
-    """
-    Parses code for import statements and resolves local imports relative to repo_dir.
-    Returns: name_loc dict: imported_alias -> {"actual_name": actual_name, "filepath": resolved_filepath}
-    """
     root_node = parser.parse(code).root_node
     name_loc = {}
     
@@ -156,15 +340,12 @@ def resolve_imports_for_file(filepath, code, repo_dir):
         parts = module_str.split('.')
         mod_path = normalize_path(os.path.join(search_base, *parts))
         
-        # Check if it's a file
         if os.path.isfile(mod_path + ".py"):
             return mod_path + ".py", False
             
-        # Check if it's a directory package
         if os.path.isdir(mod_path) and os.path.isfile(os.path.join(mod_path, "__init__.py")):
             return os.path.join(mod_path, "__init__.py"), True
             
-        # Fallback for absolute imports relative to file_dir
         if level == 0 and search_base != file_dir:
             fallback_base = file_dir
             mod_path_fb = normalize_path(os.path.join(fallback_base, *parts))
