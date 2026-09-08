@@ -9,8 +9,7 @@
 > Fully offline via local Ollama. Your code never leaves your laptop.
 
 ![Cody Maps demo](docs/demo.gif)
-*Rendered from real engine output on `psf/requests` (807 places analyzed,
-320 shown). A recorded capture of the live UI can replace this file 1:1.*
+*Real capture: the liveliest 30s of a full session (720p, 10fps). Raw footage: `docs/demo.mp4`.*
 
 ---
 

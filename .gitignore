@@ -3,6 +3,7 @@ cloned_repo
 cody.db
 *.db-journal
 *.vsix
+*.mp4
 .venv/
 venv/
 .pytest_cache/
