@@ -1,0 +1,98 @@
+{
+  "name": "cody-explorer",
+  "displayName": "Cody: Codebase Explorer",
+  "description": "Interactive call-graph map + local-AI explanations for any codebase. Needs the Cody backend (included in this repo).",
+  "version": "0.1.0",
+  "publisher": "sahilgupta2006",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cody.analyzeWorkspace",
+        "title": "Cody: Analyze Workspace"
+      },
+      {
+        "command": "cody.openMap",
+        "title": "Cody: Open Dependency Map"
+      },
+      {
+        "command": "cody.searchSymbol",
+        "title": "Cody: Search Symbol..."
+      },
+      {
+        "command": "cody.showHotspots",
+        "title": "Cody: Show Hotspots"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cody",
+          "title": "Cody",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cody": [
+        {
+          "id": "codyExplorer",
+          "name": "Code Map"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "cody.analyzeWorkspace",
+          "when": "view == codyExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "cody.openMap",
+          "when": "view == codyExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "cody.searchSymbol",
+          "when": "view == codyExplorer",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Cody",
+      "properties": {
+        "cody.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:5000",
+          "description": "URL of the Cody backend server."
+        },
+        "cody.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used to launch the backend. Empty = auto (py on Windows, python3 elsewhere)."
+        },
+        "cody.autoAnalyze": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the server and analyze the open workspace on launch."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check extension.js"
+  }
+}

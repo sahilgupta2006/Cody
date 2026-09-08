@@ -1,2 +1,9 @@
 __pycache__
 cloned_repo
+cody.db
+*.db-journal
+*.vsix
+.venv/
+venv/
+.pytest_cache/
+tests/__pycache__/

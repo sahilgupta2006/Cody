@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cody Maps — mockup v2 (fake data)</title>
+<style>
+  :root{ --ink:#202124; --mut:#5f6368; --line:#dadce0; --blue:#1a73e8;
+    --panel:#ffffff; --chip:#f1f3f4; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:#e9e7e2;color:var(--ink);
+    font-family:Roboto,"Segoe UI",Arial,sans-serif}
+  #map{position:fixed;inset:0;cursor:grab}
+  #map.drag{cursor:grabbing}
+  /* ---- SVG theme (Map vs Satellite) ---- */
+  .land{fill:#e9e7e2} body.sat .land{fill:#263026}
+  .dist{fill:#f6f4ee;stroke:#d8d4c9;stroke-width:1.5} body.sat .dist{fill:#333d33;stroke:#4a554b}
+  .extland{fill:#d9e8d4} body.sat .extland{fill:#2c3a2e}
+  .river{stroke:#a9d2f2;fill:none;stroke-linecap:round} body.sat .river{stroke:#274b63}
+  .roadcase{stroke:#c9ced6;fill:none;stroke-linecap:round} body.sat .roadcase{stroke:#e8e8e8}
+  .roadcore{stroke:#ffffff;fill:none;stroke-linecap:round} body.sat .roadcore{stroke:#3a443b}
+  .artcase{stroke:#e8a33d;fill:none;stroke-linecap:round}
+  .artcore{stroke:#fbbc04;fill:none;stroke-linecap:round}
+  .foot{stroke:#9aa0a6;fill:none;stroke-dasharray:5 5;stroke-width:2}
+  .rlab{fill:#9aa0a6;font-size:11px;font-family:Roboto,Arial} body.sat .rlab{fill:#aeb6ae}
+  .dlab{fill:#70757a;font-size:14px;letter-spacing:2px;font-family:Roboto,Arial}
+  body.sat .dlab{fill:#b9c2b9}
+  .flab{fill:#202124;font-size:13px;font-weight:500;font-family:Roboto,Arial}
+  body.sat .flab{fill:#f1f3f4}
+  .poi{fill:#fff;stroke:#5f6368;stroke-width:2;cursor:pointer}
+  .poi.lib{fill:#e8eaed;stroke:#9aa0a6}
+  /* ---- floating chrome ---- */
+  .card{background:var(--panel);border-radius:8px;box-shadow:0 1px 2px rgba(60,64,67,.3),0 2px 6px 2px rgba(60,64,67,.15)}
+  #search{position:fixed;top:12px;left:12px;width:360px;z-index:20;display:flex;align-items:center;gap:10px;padding:0 8px 0 16px;height:48px}
+  #search input{flex:1;border:none;outline:none;font-size:15px;font-family:inherit}
+  #search .repo{font-size:11px;background:var(--chip);border-radius:10px;padding:3px 9px;color:var(--mut);white-space:nowrap}
+  #results{position:fixed;top:64px;left:12px;width:360px;z-index:21;display:none;overflow:hidden;padding:6px 0}
+  #results .row{display:flex;gap:12px;align-items:center;padding:9px 16px;cursor:pointer;font-size:14px}
+  #results .row:hover{background:#f6fafe}
+  #results .row small{margin-left:auto;color:var(--mut);font-size:11px;font-family:Consolas,monospace}
+  #results .pin{color:#ea4335;font-size:15px}
+  #sat{position:fixed;top:12px;right:12px;z-index:20;display:flex;overflow:hidden;font-size:13px}
+  #sat button{border:none;background:var(--panel);padding:9px 16px;cursor:pointer;font-family:inherit;color:var(--mut)}
+  #sat button.on{background:#e8f0fe;color:var(--blue);font-weight:600}
+  /* right-side controls */
+  #ctrl{position:fixed;right:12px;bottom:96px;z-index:20;display:flex;flex-direction:column;gap:12px;align-items:center}
+  #ctrl .stack{overflow:hidden;display:flex;flex-direction:column}
+  #ctrl button.ic{width:40px;height:40px;border:none;background:var(--panel);font-size:18px;cursor:pointer;color:var(--mut)}
+  #ctrl button.ic:hover{color:var(--ink)}
+  #ctrl .stack button+button{border-top:1px solid var(--line)}
+  #layersMenu{position:fixed;right:60px;bottom:150px;z-index:21;padding:12px 16px;font-size:13px;display:none;min-width:190px}
+  #layersMenu h5{font-size:11px;color:var(--mut);font-weight:500;margin-bottom:8px}
+  #layersMenu label{display:flex;gap:9px;align-items:center;padding:6px 0;cursor:pointer}
+  /* left panel (place / trip) */
+  #panel{position:fixed;top:76px;left:12px;width:360px;max-width:calc(100vw - 24px);
+    max-height:calc(100% - 170px);overflow-y:auto;z-index:15;display:none}
+  #panel.open{display:block}
+  #panel .pad{padding:16px 20px}
+  #panel h1{font-size:22px;font-weight:400;margin:2px 0 4px}
+  #panel .cat{font-size:12px;color:var(--mut)}
+  #panel .stats{font-size:13px;color:var(--mut);margin:6px 0 2px}
+  #panel .stats b{color:var(--ink);font-weight:500}
+  .actions{display:flex;gap:4px;margin:10px 0 2px}
+  .actions button{flex:1;border:none;background:none;cursor:pointer;font-family:inherit;
+    display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:var(--blue);padding:8px 0;border-radius:8px}
+  .actions button:hover{background:#f6fafe}
+  .actions .ring{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:17px;background:#fff}
+  .tabs{display:flex;border-bottom:1px solid var(--line);margin-top:6px}
+  .tabs button{flex:1;border:none;background:none;font-family:inherit;font-size:13px;color:var(--mut);
+    padding:10px 0;cursor:pointer;border-bottom:2px solid transparent}
+  .tabs button.on{color:var(--blue);border-bottom-color:var(--blue);font-weight:500}
+  .tabpage{display:none;padding:14px 0 4px}
+  .tabpage.on{display:block}
+  .about{font-size:13.5px;line-height:1.6;color:#3c4043}
+  .irow{display:flex;gap:14px;padding:9px 0;font-size:13px;border-top:1px solid #eef0f2;align-items:flex-start}
+  .irow .ic{color:var(--mut);width:20px;text-align:center}
+  .irow code{font-family:Consolas,monospace;font-size:12px}
+  .irow .sub{color:var(--mut);font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .chip{font-size:12px;padding:6px 12px;border-radius:16px;border:1px solid var(--line);background:#fff;cursor:pointer}
+  .chip:hover{background:#f6fafe;border-color:var(--blue)}
+  pre.code{background:#f8f9fa;border:1px solid #eef0f2;border-radius:8px;padding:12px;
+    font-size:12px;line-height:1.6;overflow-x:auto;font-family:Consolas,monospace;color:#37474f}
+  #chatlog{display:flex;flex-direction:column;gap:8px;margin-bottom:8px;max-height:200px;overflow-y:auto}
+  .msg{font-size:13px;line-height:1.5;padding:9px 13px;border-radius:16px;max-width:90%}
+  .msg.you{align-self:flex-end;background:var(--blue);color:#fff;border-bottom-right-radius:4px}
+  .msg.cody{align-self:flex-start;background:var(--chip);border-bottom-left-radius:4px}
+  .msg.mock{font-size:11px;color:var(--mut);background:none;padding:0 4px;font-style:italic}
+  #askrow{display:flex;gap:8px}
+  #askrow input{flex:1;border:1px solid var(--line);border-radius:20px;padding:9px 14px;font-size:13px;outline:none;font-family:inherit}
+  #askrow input:focus{border-color:var(--blue)}
+  #askrow button{border:none;background:var(--blue);color:#fff;border-radius:50%;width:38px;height:38px;cursor:pointer;font-size:15px}
+  /* trip list */
+  .triphead{padding:16px 20px 6px}
+  .triphead h1{font-size:18px}
+  .triphead .sum{font-size:12.5px;color:var(--mut);margin-top:3px}
+  #triplist{list-style:none;padding:6px 20px}
+  #triplist li{display:flex;gap:14px;position:relative;padding:9px 0;cursor:pointer;border-radius:8px}
+  #triplist li:hover{background:#f6fafe}
+  #triplist li::before{content:"";position:absolute;left:13px;top:38px;bottom:-8px;width:2px;background:var(--line)}
+  #triplist li:last-child::before{display:none}
+  #triplist .n{width:28px;height:28px;border-radius:50%;background:#fff;border:2px solid var(--blue);
+    color:var(--blue);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none;z-index:1}
+  #triplist li.cur .n{background:var(--blue);color:#fff}
+  #triplist li.cur .t b{color:var(--blue)}
+  #triplist .t b{display:block;font-size:13.5px;font-weight:500}
+  #triplist .t small{font-size:12px;color:var(--mut)}
+  .tripfoot{display:flex;gap:8px;padding:12px 20px 16px;align-items:center}
+  .tripfoot button{flex:1;border:1px solid var(--line);background:#fff;border-radius:20px;
+    padding:9px 0;font-family:inherit;font-size:13px;cursor:pointer;color:var(--blue);font-weight:500}
+  .tripfoot button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .tripfoot button:disabled{opacity:.35}
+  #tcount{font-size:11px;color:var(--mut);white-space:nowrap}
+  /* bottom-left: scale + wordmark */
+  #scale{position:fixed;left:16px;bottom:34px;z-index:10;font-size:10.5px;color:var(--mut);text-align:center}
+  #scale .bar{height:5px;border:1.5px solid var(--mut);border-top:none;margin-bottom:2px}
+  #wordmark{position:fixed;left:16px;bottom:10px;z-index:10;font-size:15px;color:var(--mut);font-weight:500;letter-spacing:.3px}
+  #hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:30;
+    font-size:12px;color:#3c4043;padding:9px 12px 9px 16px;display:flex;gap:12px;align-items:center;max-width:92vw}
+  #hint button{border:none;background:none;cursor:pointer;color:var(--mut);font-size:14px}
+  #tip{position:fixed;pointer-events:none;z-index:40;display:none;background:#fff;color:var(--ink);
+    border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.3);padding:6px 11px;font-size:13px;font-weight:500}
+  #toast{position:fixed;bottom:64px;left:50%;transform:translateX(-50%);z-index:50;display:none;
+    background:#323232;color:#fff;font-size:13px;padding:10px 20px;border-radius:6px}
+</style>
+</head>
+<body>
+
+<svg id="map"></svg>
+
+<div id="search" class="card">
+  <span style="color:var(--mut)">🔍</span>
+  <input id="searchinput" placeholder="Search the codebase" autocomplete="off">
+  <span class="repo">sample_repo</span>
+</div>
+<div id="results" class="card"></div>
+
+<div id="sat" class="card">
+  <button id="satMap" class="on">Map</button>
+  <button id="satSat">Satellite</button>
+</div>
+
+<div id="ctrl">
+  <div class="stack card">
+    <button class="ic" id="layersBtn" title="Layers">▦</button>
+  </div>
+  <div class="stack card">
+    <button class="ic" id="zhome" title="Back to start">◎</button>
+  </div>
+  <div class="stack card">
+    <button class="ic" id="zin" title="Zoom in">+</button>
+    <button class="ic" id="zout" title="Zoom out">−</button>
+  </div>
+</div>
+<div id="layersMenu" class="card">
+  <h5>Map details</h5>
+  <label><input type="checkbox" id="layLib" checked> External libraries (river)</label>
+  <label><input type="checkbox" id="layLabels" checked> Place labels</label>
+</div>
+
+<aside id="panel" class="card">
+  <!-- place view -->
+  <div id="pview">
+    <div class="pad" style="padding-bottom:0">
+      <div class="cat" id="ccat">Function</div>
+      <h1 id="cname">—</h1>
+      <div class="stats" id="cstats">—</div>
+      <div class="actions">
+        <button id="btnRoute"><span class="ring" style="color:var(--blue)">➤</span>Route</button>
+        <button id="btnNear"><span class="ring">◎</span>Nearby</button>
+        <button id="btnAsk"><span class="ring">✎</span>Ask</button>
+        <button id="btnCopy"><span class="ring">⧉</span>Copy</button>
+      </div>
+      <div class="tabs">
+        <button data-t="overview" class="on">Overview</button>
+        <button data-t="code">Code</button>
+        <button data-t="qa">Q&amp;A</button>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="tabpage on" id="tab-overview">
+        <p class="about" id="cabout">—</p>
+        <div style="height:10px"></div>
+        <div class="irow"><span class="ic">▦</span><div><code id="frow-file">—</code><div class="sub" id="frow-lines">—</div></div></div>
+        <div class="irow"><span class="ic">←</span><div>Called by<div class="chips" id="c-callers"></div></div></div>
+        <div class="irow"><span class="ic">→</span><div>Calls<div class="chips" id="c-callees"></div></div></div>
+      </div>
+      <div class="tabpage" id="tab-code"><pre class="code" id="ccode">—</pre></div>
+      <div class="tabpage" id="tab-qa">
+        <div id="chatlog"></div>
+        <div id="askrow"><input id="askinput" placeholder="Ask about this place…"><button id="askbtn">➤</button></div>
+      </div>
+    </div>
+  </div>
+  <!-- trip view -->
+  <div id="tview" style="display:none">
+    <div class="triphead"><h1>🚗 Cody trip</h1><div class="sum" id="tsum">6 stops</div></div>
+    <ol id="triplist"></ol>
+    <div class="tripfoot">
+      <button id="tprev">← Prev</button>
+      <button id="tnext" class="primary">Next →</button>
+      <button id="tend" style="flex:.6">End</button>
+      <span id="tcount"></span>
+    </div>
+  </div>
+</aside>
+
+<div id="scale"><div class="bar" style="width:72px"></div><span id="scalelabel">100 fn</span></div>
+<div id="wordmark">Cody</div>
+
+<div id="hint" class="card"><span><b>MOCKUP · fake data.</b> Review like: “panel too wide”, “pins confusing”, “need street names”, “tour list good”.</span><button id="hintx">✕</button></div>
+<div id="tip"></div>
+<div id="toast"></div>
+
+<script>
+// ---------------- fake world ----------------
+const NODES = [
+  { id:'main',    name:'main()',      kind:'fn',  x:290, y:300, file:'main.py',     lines:'L12–17',
+    about:'The front door of the codebase. Builds a Foo, calls bar(), then runs process(). Every trip starts here.',
+    code:'def main():\n    f = Foo()\n    f.bar()\n    return process()' },
+  { id:'process', name:'process()',   kind:'fn',  x:180, y:400, file:'main.py',     lines:'L7–9',
+    about:'Thin wrapper — just calls the helper under its alias h. A good example of an import-alias road.',
+    code:'def process():\n    return h()  # h is helper, aliased on import' },
+  { id:'helper',  name:'helper()',    kind:'fn',  x:725, y:300, file:'utils.py',    lines:'L1–3',
+    about:'Downtown: the most-visited place on the map. Three roads lead here. Returns 42 — shared logic lives here.',
+    code:'def helper():\n    """Shared helper."""\n    return 42' },
+  { id:'worker',  name:'worker_fn()', kind:'fn',  x:830, y:410, file:'utils.py',    lines:'L6–7',
+    about:'Quiet side street in utils.py. Calls helper() and adds 1 — only one road in.',
+    code:'def worker_fn():\n    return helper() + 1' },
+  { id:'Foo',     name:'Foo',         kind:'cls', x:400, y:555, file:'pkg/core.py', lines:'L3–5',
+    about:'The only class downtown. Owns a single method, bar().',
+    code:'class Foo:\n    def bar(self):\n        return helper()' },
+  { id:'bar',     name:'bar()',       kind:'fn',  x:600, y:555, file:'pkg/core.py', lines:'L4–5',
+    about:'Foo’s method. Crosses the whole map to call helper() over in utils.py — a long but important road.',
+    code:'def bar(self):\n    return helper()' },
+  { id:'print',   name:'print',       kind:'lib', x:1010, y:250, file:'external',   lines:'stdlib',
+    about:'Across the river: a standard-library crossing, not your code. Cody maps it so you see the dependency.',
+    code:'# external — no source on this map' },
+  { id:'thread',  name:'threading',   kind:'lib', x:1010, y:380, file:'external',   lines:'stdlib',
+    about:'Across the river: used for background work. External land — shown for context, greyed out.',
+    code:'# external — no source on this map' },
+];
+const EDGES = [
+  { a:'main', b:'process' }, { a:'main', b:'bar', art:true },
+  { a:'process', b:'helper' }, { a:'bar', b:'helper', art:true },
+  { a:'worker', b:'helper' }, { a:'Foo', b:'bar', foot:true },
+  { a:'main', b:'print', ext:true }, { a:'worker', b:'thread', ext:true },
+];
+const DISTRICTS = [
+  { name:'MAIN.PY',     x:110, y:150, w:350, h:340 },
+  { name:'UTILS.PY',    x:560, y:150, w:340, h:340 },
+  { name:'PKG / CORE',  x:290, y:480, w:440, h:160 },
+];
+const TOUR = [
+  { id:'main',    note:'You are here — the front door' },
+  { id:'process', note:'Follow the road — main calls process' },
+  { id:'helper',  note:'Downtown — everybody calls helper' },
+  { id:'bar',     note:'Cross-district road back to bar' },
+  { id:'Foo',     note:'The class this method lives in' },
+  { id:'worker',  note:'Quiet side street — trip complete' },
+];
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+const callersOf = id => EDGES.filter(e => e.b === id && !e.ext).map(e => e.a);
+const callsOf   = id => EDGES.filter(e => e.a === id && !e.ext).map(e => e.b);
+
+// ---------------- svg ----------------
+const svg = document.getElementById('map');
+const NS = 'http://www.w3.org/2000/svg';
+const el = (t, attrs, parent) => {
+  const e = document.createElementNS(NS, t);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(e); return e;
+};
+el('rect', { x:-2000, y:-2000, width:6000, height:6000, class:'land' });
+// external land across the river
+const gExt = el('g', { id:'extland' });
+el('rect', { x:940, y:-2000, width:3000, height:6000, class:'extland' }, gExt);
+el('path', { d:'M 945 -2000 C 900 0, 990 400, 945 2700', class:'river', 'stroke-width':46 }, gExt);
+el('path', { d:'M 945 -2000 C 900 0, 990 400, 945 2700', class:'river', 'stroke-width':46,
+  stroke:'#c4e2fb', opacity:.5 }, gExt);
+// district blocks
+const gDist = el('g', {});
+DISTRICTS.forEach(d => {
+  el('rect', { x:d.x, y:d.y, width:d.w, height:d.h, rx:10, class:'dist' }, gDist);
+  const t = el('text', { x:d.x + d.w/2, y:d.y + d.h/2, 'text-anchor':'middle', class:'dlab' }, gDist);
+  t.textContent = d.name;
+});
+// roads
+function roadD(a, b) {
+  const mx = (a.x + b.x)/2, my = (a.y + b.y)/2;
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const bend = Math.min(44, len * 0.15);
+  return `M ${a.x} ${a.y} Q ${mx - dy/len*bend} ${my + dx/len*bend} ${b.x} ${b.y}`;
+}
+const gRC = el('g', {}), gR = el('g', {});
+const gRouteCase = el('g', {}), gRouteBlue = el('g', {}), gRouteWalk = el('g', {});
+const edgePath = {};
+EDGES.forEach((e, i) => {
+  const a = byId[e.a], b = byId[e.b], d = roadD(a, b);
+  const grp = (e.ext) ? gExt : svg;
+  if (e.foot) {
+    const p = el('path', { d, class:'foot' }, gR); edgePath[e.a + '>' + e.b] = p;
+  } else if (e.ext) {
+    const p = el('path', { d, fill:'none', stroke:'#b9c4b2', 'stroke-width':2.5,
+      'stroke-dasharray':'7 6', opacity:.8 }, gExt); edgePath[e.a + '>' + e.b] = p;
+  } else {
+    el('path', { d, class: e.art ? 'artcase' : 'roadcase', 'stroke-width': e.art ? 13 : 10 }, gRC);
+    const p = el('path', { d, class: e.art ? 'artcore' : 'roadcore', 'stroke-width': e.art ? 8 : 5.5,
+      id: 'rd' + i }, gR);
+    edgePath[e.a + '>' + e.b] = p;
+  }
+});
+// one road label, like a street name
+(function(){
+  const t = el('text', { class:'rlab' }, svg);
+  const tp = document.createElementNS(NS, 'textPath');
+  tp.setAttribute('href', '#rd3'); tp.setAttribute('startOffset', '50%');
+  tp.setAttribute('text-anchor', 'middle'); tp.textContent = '← 3 callers';
+  t.appendChild(tp);
+})();
+// place dots
+const gDot = el('g', {}), gLab = el('g', {});
+const dotEls = {};
+NODES.forEach(n => {
+  const c = el('circle', { cx:n.x, cy:n.y, r: n.kind === 'cls' ? 8 : 6.5,
+    class: 'poi' + (n.kind === 'lib' ? ' lib' : ''), 'data-id': n.id }, gDot);
+  dotEls[n.id] = c;
+  const t = el('text', { x:n.x, y:n.y - 14, 'text-anchor':'middle', class:'flab', 'data-id': n.id }, gLab);
+  t.textContent = n.name + (n.kind === 'lib' ? ' ⊞' : '');
+  c.addEventListener('mouseenter', ev => hover(n.id, true, ev));
+  c.addEventListener('mouseleave', () => hover(n.id, false));
+  t.addEventListener('mouseenter', ev => hover(n.id, true, ev));
+  t.addEventListener('mouseleave', () => hover(n.id, false));
+  c.addEventListener('click', ev => { ev.stopPropagation(); openPlace(n.id, true); });
+  t.addEventListener('click', ev => { ev.stopPropagation(); openPlace(n.id, true); });
+  t.style.cursor = 'pointer';
+});
+// selected red pin (the iconic teardrop)
+const gPin = el('g', { opacity: 0 });
+el('ellipse', { cx:0, cy:2, rx:10, ry:3.5, fill:'rgba(0,0,0,.25)' }, gPin);
+const pinBody = el('path', { d:'M 0 -34 C -9 -34 -15 -27 -15 -19 C -15 -9 0 0 0 0 C 0 0 15 -9 15 -19 C 15 -27 9 -34 0 -34 Z',
+  fill:'#ea4335' }, gPin);
+el('circle', { cx:0, cy:-19, r:6, fill:'#fff' }, gPin);
+function dropPin(x, y){
+  gPin.setAttribute('opacity', 1);
+  const t0 = performance.now(), dur = 420;
+  (function step(t){
+    const k = Math.min(1, (t - t0) / dur);
+    const e2 = 1 - Math.pow(1 - k, 3);
+    const bounce = k > .62 ? Math.sin((k - .62) / .38 * Math.PI) * -7 * (1 - k) : 0;
+    gPin.setAttribute('transform', `translate(${x},${y - 34 * (1 - e2) + bounce})`);
+    if (k < 1) requestAnimationFrame(step);
+  })(t0);
+}
+// tour stop pins (blue, numbered)
+const gStops = el('g', {});
+function clearStops(){ gStops.innerHTML = ''; }
+function addStopPin(n, num){
+  const g = el('g', { transform:`translate(${n.x},${n.y})` }, gStops);
+  el('ellipse', { cx:0, cy:2, rx:9, ry:3, fill:'rgba(0,0,0,.22)' }, g);
+  el('path', { d:'M 0 -30 C -8 -30 -13 -24 -13 -17 C -13 -8 0 0 0 0 C 0 0 13 -8 13 -17 C 13 -24 8 -30 0 -30 Z',
+    fill:'#1a73e8' }, g);
+  const t = el('text', { x:0, y:-13, 'text-anchor':'middle', fill:'#fff',
+    'font-size':11, 'font-weight':700 }, g);
+  t.textContent = num;
+}
+const traveler = el('circle', { r:6.5, fill:'#1a73e8', stroke:'#fff', 'stroke-width':2.5, opacity:0 }, svg);
+
+// ---------------- camera ----------------
+let view = { x:60, y:120, w:560, h:392 }, scale = 1;
+const BASE_W = 560;
+function applyView(){
+  svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+  const far = scale < .62;
+  document.querySelectorAll('.flab').forEach(t => {
+    t.style.display = (far || !labelsOn) ? 'none' : '';
+  });
+  document.querySelectorAll('.dlab').forEach(t => t.setAttribute('font-size', far ? 24 : 14));
+  const steps = [[.4,'500 fn'],[.62,'250 fn'],[1,'100 fn'],[1.6,'50 fn'],[9,'25 fn']];
+  document.getElementById('scalelabel').textContent = steps.find(s => scale < s[0])[1];
+}
+function zoomAt(f){
+  scale = Math.min(3.2, Math.max(.4, scale * f));
+  view.w = BASE_W / scale; view.h = view.w * 0.7; applyView();
+}
+document.getElementById('zin').onclick = () => zoomAt(1.3);
+document.getElementById('zout').onclick = () => zoomAt(1 / 1.3);
+document.getElementById('zhome').onclick = () => flyTo(byId.main, 1);
+svg.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive:false });
+svg.addEventListener('dblclick', e => { e.preventDefault(); zoomAt(1.5); });
+let drag = null;
+svg.addEventListener('pointerdown', e => {
+  drag = { x:e.clientX, y:e.clientY, vx:view.x, vy:view.y, moved:false }; svg.classList.add('drag');
+});
+window.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+  const r = svg.getBoundingClientRect(), k = view.w / r.width;
+  view.x = drag.vx - dx * k; view.y = drag.vy - dy * k; applyView();
+});
+window.addEventListener('pointerup', ev => {
+  const wasDrag = drag && drag.moved; drag = null; svg.classList.remove('drag');
+  if (!wasDrag && ev && ev.target === svg) closePanel();
+});
+function flyTo(n, s, done){
+  if (s) scale = s;
+  const tw = BASE_W / scale, th = tw * 0.7;
+  const from = { ...view }, to = { x:n.x - tw/2, y:n.y - th/2, w:tw, h:th };
+  const t0 = performance.now(), dur = 650;
+  (function step(t){
+    const k = Math.min(1, (t - t0) / dur), ez = 1 - Math.pow(1 - k, 3);
+    view = { x:from.x + (to.x - from.x) * ez, y:from.y + (to.y - from.y) * ez,
+             w:from.w + (to.w - from.w) * ez, h:from.h + (to.h - from.h) * ez };
+    applyView();
+    if (k < 1) requestAnimationFrame(step); else done && done();
+  })(t0);
+}
+
+// ---------------- hover: neighbour roads go gold ----------------
+const tip = document.getElementById('tip');
+function hover(id, on, ev){
+  EDGES.forEach(e => {
+    if (e.foot || e.ext) return;
+    const hit = (e.a === id || e.b === id);
+    const p = edgePath[e.a + '>' + e.b];
+    if (!p) return;
+    p.setAttribute('opacity', on ? (hit ? 1 : .25) : 1);
+    if (on && hit) { p.style.stroke = '#fbbc04'; p.style.strokeWidth = '7'; }
+    else { p.style.stroke = ''; p.style.strokeWidth = ''; }
+  });
+  NODES.forEach(n => {
+    if (n.id === id) return;
+    const linked = EDGES.some(e => !e.ext && ((e.a === id && e.b === n.id) || (e.b === id && e.a === n.id)));
+    dotEls[n.id].setAttribute('opacity', on && !linked ? .3 : 1);
+  });
+  if (on && ev) {
+    tip.style.display = 'block'; tip.textContent = byId[id].name;
+    tip.style.left = (ev.clientX + 14) + 'px'; tip.style.top = (ev.clientY + 8) + 'px';
+  } else tip.style.display = 'none';
+}
+
+// ---------------- place panel ----------------
+let selected = null, touring = false, stopIx = -1;
+const panel = document.getElementById('panel');
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 1600);
+}
+function showTab(name){
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === name));
+  document.querySelectorAll('.tabpage').forEach(p => p.classList.toggle('on', p.id === 'tab-' + name));
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.t));
+function openPlace(id, fly){
+  selected = id;
+  const n = byId[id];
+  dropPin(n.x, n.y);
+  document.getElementById('pview').style.display = '';
+  document.getElementById('tview').style.display = 'none';
+  document.getElementById('ccat').textContent =
+    n.kind === 'cls' ? 'Class' : n.kind === 'lib' ? 'External library' : 'Function';
+  document.getElementById('cname').textContent = n.name;
+  const inn = callersOf(id), out = callsOf(id);
+  document.getElementById('cstats').innerHTML =
+    `<b>← ${inn.length}</b> caller${inn.length === 1 ? '' : 's'} · <b>→ ${out.length}</b> call${out.length === 1 ? '' : 's'} · ${n.file}`;
+  document.getElementById('cabout').textContent = n.about;
+  document.getElementById('frow-file').textContent = n.file === 'external' ? 'not in this repo' : n.file;
+  document.getElementById('frow-lines').textContent = n.lines;
+  document.getElementById('ccode').textContent = n.code;
+  const mk = (arr, box) => {
+    const c = document.getElementById(box); c.innerHTML = '';
+    if (!arr.length) c.innerHTML = '<span style="font-size:12px;color:var(--mut)">None</span>';
+    arr.forEach(o => {
+      const s = document.createElement('span'); s.className = 'chip'; s.textContent = byId[o].name;
+      s.onclick = () => openPlace(o, true); c.appendChild(s);
+    });
+  };
+  mk(inn, 'c-callers'); mk(out, 'c-callees');
+  document.getElementById('chatlog').innerHTML = '';
+  showTab('overview');
+  panel.classList.add('open');
+  if (fly) flyTo(n, Math.max(scale, 1));
+}
+function closePanel(){
+  panel.classList.remove('open'); selected = null;
+  gPin.setAttribute('opacity', 0);
+}
+document.getElementById('btnRoute').onclick = () => {
+  const ix = TOUR.findIndex(s => s.id === selected);
+  startTour(ix >= 0 ? ix : 0);
+};
+document.getElementById('btnNear').onclick = () => {
+  if (!selected) return;
+  showTab('overview');
+  EDGES.forEach(e => {
+    if (e.a !== selected && e.b !== selected) return;
+    const o = e.a === selected ? e.b : e.a;
+    const d = dotEls[o];
+    d.style.stroke = '#1a73e8'; d.style.strokeWidth = '4';
+    setTimeout(() => { d.style.stroke = ''; d.style.strokeWidth = ''; }, 1300);
+  });
+  toast('Blue rings = directly connected');
+};
+document.getElementById('btnAsk').onclick = () => {
+  showTab('qa'); document.getElementById('askinput').focus();
+};
+document.getElementById('btnCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(byId[selected].name); toast('Copied to clipboard'); }
+  catch { toast(byId[selected].name); }
+};
+// Q&A (mock replies, labelled)
+const CANNED = [
+  'Short version: {n} {a2}',
+  '{n} sits at the junction of {c} road(s). Delete it and every gold road on hover is what breaks.',
+  'One job, done well — that is why {c} caller(s) share it instead of copying the code.',
+];
+let cannedIx = 0;
+function ask(){
+  const inp = document.getElementById('askinput');
+  const q = inp.value.trim(); if (!q || !selected) return;
+  inp.value = '';
+  const log = document.getElementById('chatlog');
+  const you = document.createElement('div'); you.className = 'msg you'; you.textContent = q; log.appendChild(you);
+  const ty = document.createElement('div'); ty.className = 'msg cody'; ty.textContent = '…'; log.appendChild(ty);
+  const n = byId[selected];
+  setTimeout(() => {
+    ty.textContent = CANNED[cannedIx++ % CANNED.length]
+      .replaceAll('{n}', n.name)
+      .replaceAll('{a2}', n.about.charAt(0).toLowerCase() + n.about.slice(1))
+      .replaceAll('{c}', callersOf(selected).length);
+    const m = document.createElement('div'); m.className = 'msg mock';
+    m.textContent = '(mockup reply — real Cody answers with your local AI)';
+    log.appendChild(m); log.scrollTop = log.scrollHeight;
+  }, 600);
+}
+document.getElementById('askbtn').onclick = ask;
+document.getElementById('askinput').addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+
+// ---------------- tour = directions ----------------
+function legPath(aId, bId){
+  const fwd = edgePath[aId + '>' + bId], rev = edgePath[bId + '>' + aId];
+  if (fwd) return { d: fwd.getAttribute('d'), walk: false };
+  if (rev) return { d: rev.getAttribute('d'), walk: false };
+  const a = byId[aId], b = byId[bId];   // no road: dashed "walking" segment, like Maps
+  return { d: `M ${a.x} ${a.y} L ${b.x} ${b.y}`, walk: true };
+}
+function buildRoute(){
+  gRouteCase.innerHTML = ''; gRouteBlue.innerHTML = ''; gRouteWalk.innerHTML = '';
+  for (let i = 0; i < TOUR.length - 1; i++) {
+    const leg = legPath(TOUR[i].id, TOUR[i + 1].id);
+    if (leg.walk) {
+      el('path', { d: leg.d, fill:'none', stroke:'#5f6368', 'stroke-width':3, 'stroke-dasharray':'2 7', 'stroke-linecap':'round' }, gRouteWalk);
+    } else {
+      el('path', { d: leg.d, fill:'none', stroke:'#fff', 'stroke-width':9, 'stroke-linecap':'round', opacity:.95 }, gRouteCase);
+      const p = el('path', { d: leg.d, fill:'none', stroke:'#1a73e8', 'stroke-width':5.5, 'stroke-linecap':'round' }, gRouteBlue);
+      p.dataset.leg = i;
+    }
+  }
+}
+function renderTripList(){
+  const ol = document.getElementById('triplist'); ol.innerHTML = '';
+  TOUR.forEach((s, i) => {
+    const li = document.createElement('li');
+    if (i === stopIx) li.className = 'cur';
+    li.innerHTML = `<span class="n">${i + 1}</span><span class="t"><b>${byId[s.id].name}</b><small>${s.note}</small></span>`;
+    li.onclick = () => goStop(i);
+    ol.appendChild(li);
+  });
+  document.getElementById('tsum').textContent = `${TOUR.length} stops · ${EDGES.filter(e => !e.ext && !e.foot).length} roads`;
+  document.getElementById('tcount').textContent = touring ? `${stopIx + 1} / ${TOUR.length}` : '';
+  document.getElementById('tprev').disabled = !touring || stopIx <= 0;
+  document.getElementById('tnext').textContent =
+    !touring ? 'Start →' : stopIx >= TOUR.length - 1 ? 'Finish ✔' : 'Next →';
+}
+function startTour(ix){
+  touring = true; clearStops();
+  TOUR.forEach((s, i) => addStopPin(byId[s.id], i + 1));
+  buildRoute();
+  document.getElementById('pview').style.display = 'none';
+  document.getElementById('tview').style.display = '';
+  panel.classList.add('open');
+  goStop(ix || 0);
+}
+function endTour(){
+  touring = false; stopIx = -1; clearStops();
+  gRouteCase.innerHTML = ''; gRouteBlue.innerHTML = ''; gRouteWalk.innerHTML = '';
+  traveler.setAttribute('opacity', 0);
+  renderTripList(); closePanel();
+}
+function goStop(ix){
+  if (ix < 0 || ix >= TOUR.length) return;
+  const prevId = (touring && stopIx >= 0) ? TOUR[stopIx].id : null;
+  stopIx = ix; renderTripList();
+  const target = byId[TOUR[ix].id];
+  const arrive = () => { dropPin(target.x, target.y); selected = target.id; };
+  if (prevId && prevId !== target.id) {
+    const leg = legPath(prevId, target.id);
+    const tmp = el('path', { d: leg.d, fill:'none', stroke:'none' }, svg);
+    const L = tmp.getTotalLength(), fwdLeg = !!edgePath[prevId + '>' + target.id] || leg.walk;
+    traveler.setAttribute('opacity', 1);
+    const t0 = performance.now(), dur = 800;
+    (function step(t){
+      const k = Math.min(1, (t - t0) / dur);
+      const pt = tmp.getPointAtLength(fwdLeg ? L * k : L * (1 - k));
+      traveler.setAttribute('cx', pt.x); traveler.setAttribute('cy', pt.y);
+      view.x = pt.x - view.w / 2; view.y = pt.y - view.h / 2; applyView();
+      if (k < 1) requestAnimationFrame(step);
+      else { tmp.remove(); traveler.setAttribute('opacity', 0); arrive(); }
+    })(t0);
+  } else flyTo(target, 1, arrive);
+}
+document.getElementById('tnext').onclick = () => {
+  if (!touring) startTour(0);
+  else if (stopIx >= TOUR.length - 1) { endTour(); toast('Trip complete 🎉'); }
+  else goStop(stopIx + 1);
+};
+document.getElementById('tprev').onclick = () => goStop(stopIx - 1);
+document.getElementById('tend').onclick = endTour;
+
+// ---------------- search autocomplete ----------------
+const sInput = document.getElementById('searchinput'), sBox = document.getElementById('results');
+function doSearch(){
+  const q = sInput.value.trim().toLowerCase();
+  if (!q) { sBox.style.display = 'none'; return; }
+  const hits = NODES.filter(n => n.name.toLowerCase().includes(q) || n.file.toLowerCase().includes(q)).slice(0, 6);
+  sBox.innerHTML = '';
+  if (!hits.length) {
+    sBox.innerHTML = '<div class="row" style="color:var(--mut)">No results — try “helper”</div>';
+  } else hits.forEach(n => {
+    const r = document.createElement('div'); r.className = 'row';
+    r.innerHTML = `<span class="pin">📍</span><span>${n.name}</span><small>${n.file}</small>`;
+    r.onmousedown = () => {
+      sBox.style.display = 'none'; sInput.value = n.name;
+      if (scale < 1) scale = 1;
+      flyTo(n, 1, () => touring ? goStop(TOUR.findIndex(s => s.id === n.id) >= 0 ? TOUR.findIndex(s => s.id === n.id) : stopIx) : openPlace(n.id, false));
+    };
+    sBox.appendChild(r);
+  });
+  sBox.style.display = 'block';
+}
+sInput.addEventListener('input', doSearch);
+sInput.addEventListener('blur', () => setTimeout(() => sBox.style.display = 'none', 150));
+sInput.addEventListener('focus', doSearch);
+
+// ---------------- chrome wiring ----------------
+let labelsOn = true;
+document.getElementById('satMap').onclick = () => {
+  document.body.classList.remove('sat');
+  document.getElementById('satMap').className = 'on';
+  document.getElementById('satSat').className = '';
+};
+document.getElementById('satSat').onclick = () => {
+  document.body.classList.add('sat');
+  document.getElementById('satSat').className = 'on';
+  document.getElementById('satMap').className = '';
+  toast('Satellite is decorative in this mockup 🛰');
+};
+document.getElementById('layersBtn').onclick = () => {
+  const m = document.getElementById('layersMenu');
+  m.style.display = m.style.display === 'block' ? 'none' : 'block';
+};
+document.getElementById('layLib').onchange = e => {
+  gExt.style.display = e.target.checked ? '' : 'none';
+};
+document.getElementById('layLabels').onchange = e => {
+  labelsOn = e.target.checked; applyView();
+};
+document.getElementById('hintx').onclick = () =>
+  document.getElementById('hint').style.display = 'none';
+
+// ---------------- boot: open on the front door ----------------
+applyView();
+// a gentle first-run: drop the pin on main() with its card open, like searching an address
+dropPin(byId.main.x, byId.main.y);
+openPlace('main', false);
+</script>
+</body>
+</html>

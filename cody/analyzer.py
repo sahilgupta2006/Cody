@@ -2,23 +2,159 @@ import os
 import re
 import subprocess
 from collections import deque, defaultdict
-import ollama
 from cody.parser import Node, resolve_imports_for_file, get_parser, LANG_MAP, parse_regex_symbols, get_language_parser, LANG_CONFIGS, get_node_name, extract_call_name
 
 parser = get_parser()
-SUPPORTED_EXTS = [".py"] + list(LANG_MAP.keys())
+SUPPORTED_EXTS = list(dict.fromkeys([".py"] + list(LANG_MAP.keys())))
+
+# Directories/files never indexed (noise, venvs, build output, VCS internals)
+IGNORE_DIRS = {
+    ".git", ".hg", ".svn", ".tox", ".venv", "venv", "__pycache__",
+    "node_modules", "target", "build", "dist", ".next", ".idea", ".vscode",
+    ".pytest_cache", ".mypy_cache", "cloned_repo",
+}
+IGNORE_SUFFIXES = (".pyc", ".pyo", ".min.js", ".bundle.js", ".lock")
+MAX_FILE_BYTES = 512 * 1024  # skip giant generated files
+
+_OLLAMA_CLIENT = None
+
+
+def ollama_host():
+    """Where we talk to Ollama (explicit env or library default)."""
+    return os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434"
+
+
+def ollama_client():
+    """Our own Ollama client that NEVER touches proxy env vars.
+
+    The library's module-level singleton freezes proxy config at import time,
+    so on proxied networks it routes even loopback through the office proxy
+    (observed: a proxy 504 HTML page coming back as an "explanation").
+    trust_env=False makes our calls proxy-proof by construction, regardless
+    of import order or user env. Safe for localhost Ollama.
+    """
+    global _OLLAMA_CLIENT
+    if _OLLAMA_CLIENT is None:
+        from ollama import Client
+        _OLLAMA_CLIENT = Client(host=ollama_host(), trust_env=False)
+    return _OLLAMA_CLIENT
+
+
+def ollama_reachable(timeout=2.0):
+    """TCP-level check: is anything listening at the Ollama host?"""
+    try:
+        from urllib.parse import urlparse
+        import socket
+        u = urlparse(ollama_host())
+        host = u.hostname or "127.0.0.1"
+        port = u.port or (443 if u.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _norm(p):
+    return os.path.normpath(os.path.abspath(p)).replace('\\', '/')
+
+
+def is_excluded(path, repo_dir):
+    """True if path should be skipped during analysis."""
+    try:
+        rel = os.path.relpath(path, repo_dir)
+    except ValueError:
+        return True
+    parts = rel.replace('\\', '/').split('/')
+    if any(part in IGNORE_DIRS for part in parts):
+        return True
+    low = path.lower()
+    if low.endswith(IGNORE_SUFFIXES):
+        return True
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) > MAX_FILE_BYTES:
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def slugify_repo(source):
+    import re as _re
+    s = source.strip().rstrip('/').replace('\\', '/')
+    if s.endswith('.git'):
+        s = s[:-4]
+    s = s.split('/')[-1] or 'repo'
+    s = _re.sub(r'[^a-zA-Z0-9-_]+', '-', s).strip('-').lower() or 'repo'
+    return s
+
+
+def get_commit_sha(repo_dir):
+    try:
+        r = subprocess.run(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+def is_git_url(source):
+    s = (source or "").strip()
+    return s.startswith(("http://", "https://", "git@", "ssh://", "git://")) or s.endswith(".git")
+
+
+def resolve_repo(source, target_dir="cloned_repo"):
+    """Accept a GitHub URL *or* a local folder. Returns (repo_dir, repo_name, commit_sha).
+
+    - Local folder: used directly, no copy, no clone.
+    - Git URL: cloned once into target_dir/<slug>, pulled on re-run.
+    """
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("Empty repository source")
+
+    # Local path support (the #1 real use case: `cody .`)
+    if os.path.isdir(source):
+        repo_dir = _norm(source)
+        name = os.path.basename(repo_dir.rstrip('/')) or "local-repo"
+        return repo_dir, slugify_repo(name), get_commit_sha(repo_dir)
+
+    if not is_git_url(source):
+        # Maybe a local path with ~ or relative form
+        expanded = os.path.abspath(os.path.expanduser(source))
+        if os.path.isdir(expanded):
+            repo_dir = _norm(expanded)
+            name = os.path.basename(repo_dir.rstrip('/')) or "local-repo"
+            return repo_dir, slugify_repo(name), get_commit_sha(repo_dir)
+        raise ValueError(f"Not a Git URL or local folder: {source}")
+
+    slug = slugify_repo(source)
+    base = _norm(target_dir)
+    os.makedirs(base, exist_ok=True)
+    repo_dir = f"{base}/{slug}"
+
+    if os.path.isdir(os.path.join(repo_dir, ".git")):
+        print(f"Repo already cloned at {repo_dir}, pulling latest...")
+        try:
+            subprocess.run(["git", "-C", repo_dir, "pull", "--ff-only"], check=False, timeout=120)
+        except Exception as e:
+            print(f"[WARN] git pull failed: {e}")
+        return _norm(repo_dir), slug, get_commit_sha(repo_dir)
+
+    if os.path.exists(repo_dir):
+        print(f"Repo already cloned at {repo_dir}!")
+        return _norm(repo_dir), slug, get_commit_sha(repo_dir)
+
+    print(f"Cloning {source} into {repo_dir}...")
+    subprocess.run(["git", "clone", "--depth", "1", source, repo_dir], check=True, timeout=600)
+    return _norm(repo_dir), slug, get_commit_sha(repo_dir)
+
 
 def clone_repo(url, target_dir="cloned_repo"):
-    target_dir = os.path.normpath(os.path.abspath(target_dir)).replace('\\', '/')
-    if os.path.exists(target_dir):
-        print(f"Repo already cloned at {target_dir}!")
-        return target_dir
+    repo_dir, _slug, _sha = resolve_repo(url, target_dir)
+    return repo_dir
 
-    print(f"Cloning {url} into {target_dir}...")
-    subprocess.run(["git", "clone", url, target_dir], check=True)
-    return target_dir
-
-def make_nodes(repo_dir="cloned_repo"):
+def make_nodes(repo_dir="cloned_repo", progress=None):
     if not os.path.exists(repo_dir):
         return [], defaultdict(list), dict(), {}, {}
 
@@ -32,13 +168,26 @@ def make_nodes(repo_dir="cloned_repo"):
     repo_dir = os.path.normpath(os.path.abspath(repo_dir)).replace('\\', '/')
 
     for root_dir, dirs, files in os.walk(repo_dir):
+        # Prune noise dirs so we never descend into venvs/build output/VCS
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith('.')]
+        if is_excluded(root_dir, repo_dir):
+            continue
         for file in files:
             ext = os.path.splitext(file)[1].lower()
             if ext in SUPPORTED_EXTS:
                 filename = os.path.normpath(os.path.abspath(os.path.join(root_dir, file))).replace('\\', '/')
-
-                with open(filename, "rb") as f:
-                    code_bytes = f.read()
+                if is_excluded(filename, repo_dir):
+                    continue
+                try:
+                    with open(filename, "rb") as f:
+                        code_bytes = f.read()
+                except OSError:
+                    continue
+                if progress:
+                    try:
+                        progress("scanning", filename)
+                    except Exception:
+                        pass
                 
                 # 1. Resolve Imports
                 if ext == ".py":
@@ -186,15 +335,15 @@ def get_node_source(filepath, start_byte, end_byte):
         print(f"Error reading source bytes: {e}")
         return ""
 
-def detect_dynamic_dispatch(code_snippet):
+def detect_dynamic_dispatch(code_snippet, model=None):
     try:
         prompt = (
             f"Is this line invoking a user-defined function as callback or thread target? "
             f"If yes return just the function name. If no return NULL.\n\n"
-            f"{code_snippet}"
+            f"{code_snippet[:2000]}"
         )
-        response = ollama.chat(
-            model='qwen2.5-coder:3b',
+        response = ollama_client().chat(
+            model=model or OLLAMA_MODEL,
             messages=[{'role': 'user', 'content': prompt}],
             options={'temperature': 0.0}
         )
@@ -227,7 +376,7 @@ def find_callback_candidates(call_node, name_node):
                     candidates.append(name)
     return candidates
 
-def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="cloned_repo"):
+def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="cloned_repo", progress=None, skip_llm=False):
     if not os.path.exists(repo_dir):
         return defaultdict(list)
 
@@ -236,12 +385,25 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
     repo_dir = os.path.normpath(os.path.abspath(repo_dir)).replace('\\', '/')
 
     for root_dir, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith('.')]
+        if is_excluded(root_dir, repo_dir):
+            continue
         for file in files:
             ext = os.path.splitext(file)[1].lower()
             if ext in SUPPORTED_EXTS:
                 filename = os.path.normpath(os.path.abspath(os.path.join(root_dir, file))).replace('\\', '/')
-                with open(filename, "rb") as f:
-                    code_bytes = f.read()
+                if is_excluded(filename, repo_dir):
+                    continue
+                try:
+                    with open(filename, "rb") as f:
+                        code_bytes = f.read()
+                except OSError:
+                    continue
+                if progress:
+                    try:
+                        progress("linking", filename)
+                    except Exception:
+                        pass
 
                 lang_parser = get_language_parser(ext)
                 if lang_parser and ext in LANG_CONFIGS:
@@ -284,8 +446,8 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                                             adj_list[caller_id].append((lib_entity, 'direct'))
                                             added_edges.add(edge_key)
 
-                                # 2. Sniff dynamic dispatch
-                                if ext == ".py":
+                                # 2. Sniff dynamic dispatch (skipped in fast mode to keep analysis <10s)
+                                if ext == ".py" and not skip_llm:
                                     callback_candidates = find_callback_candidates(r, name_node)
                                     if callback_candidates:
                                         code_snippet = get_node_source(filename, r.start_byte, r.end_byte)
@@ -343,16 +505,19 @@ def make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir="clon
                         
     return adj_list
 
-def get_node_explanation(node_name, code_snippet):
+OLLAMA_MODEL = os.environ.get("CODY_MODEL", "qwen2.5-coder:3b")
+
+
+def get_node_explanation(node_name, code_snippet, model=None):
     try:
         prompt = (
             f"Explain this function or class in 2-3 sentences for a developer new to this codebase. "
             f"Keep it concise, clear, and focused. Avoid introductory phrases like 'This function...' or 'Here is...'.\n\n"
             f"Entity Name: {node_name}\n"
-            f"Code:\n{code_snippet}"
+            f"Code:\n{code_snippet[:4000]}"
         )
-        response = ollama.chat(
-            model='qwen2.5-coder:3b',
+        response = ollama_client().chat(
+            model=model or OLLAMA_MODEL,
             messages=[{'role': 'user', 'content': prompt}],
             options={'temperature': 0.2}
         )
@@ -360,19 +525,46 @@ def get_node_explanation(node_name, code_snippet):
     except Exception as e:
         return f"Error generating explanation: {e}"
 
-def run_analysis(repo_url, db_path="cody.db", repo_dir="cloned_repo"):
+
+def compute_hotspots(nodes_table, adj_list, top_n=10):
+    """Complexity hotspots: highest fan-out + highest fan-in. Cheap, no LLM."""
+    from collections import Counter
+    fan_out = {nid: len(adj_list.get(nid, [])) for nid in nodes_table}
+    fan_in = Counter()
+    for frm, tos in adj_list.items():
+        for to, _typ in tos:
+            fan_in[to] += 1
+    def top(d):
+        return sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    return {"fan_out": top(fan_out), "fan_in": fan_in.most_common(top_n)}
+
+
+def run_analysis(repo_url, db_path="cody.db", repo_dir="cloned_repo", progress=None, skip_llm=True, repo_id=None):
     from cody.database import save_to_db
-    
-    # 1. Clone
-    repo_dir = clone_repo(repo_url, repo_dir)
-    repo_dir = os.path.normpath(os.path.abspath(repo_dir)).replace('\\', '/')
-    
+
+    # 1. Resolve (clone URL or use local folder directly)
+    actual_dir, slug, sha = resolve_repo(repo_url, repo_dir)
+    actual_dir = _norm(actual_dir)
+    rid = repo_id or slug
+
+    def _prog(phase, detail=""):
+        if progress:
+            try:
+                progress(phase, detail)
+            except Exception:
+                pass
+
+    _prog("scanning", "starting")
     # 2. Make Nodes
-    nodes, name_node, nodes_table, scope_table, file_imports = make_nodes(repo_dir)
-    
-    # 3. Make Edges
-    adj_list = make_edges(name_node, nodes_table, scope_table, file_imports, repo_dir)
-    
-    # 4. Save to Database
-    save_to_db(nodes, adj_list, db_path)
-    return repo_dir
+    nodes, name_node, nodes_table, scope_table, file_imports = make_nodes(actual_dir, progress=_prog)
+
+    _prog("linking", f"{len(nodes)} symbols found")
+    # 3. Make Edges (LLM dispatch detection OFF by default for speed; on-demand later)
+    adj_list = make_edges(name_node, nodes_table, scope_table, file_imports, actual_dir, progress=_prog, skip_llm=skip_llm)
+
+    # 4. Save to Database (per-repo, no wipe)
+    _prog("saving", f"{len(nodes)} nodes")
+    save_to_db(nodes, adj_list, db_path, repo_id=rid,
+               repo_name=slug, repo_source=repo_url, commit_sha=sha)
+    _prog("done", rid)
+    return actual_dir

@@ -1,0 +1,16 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+cloned_repo
+cody.db
+*.db-journal
+.venv
+venv/
+.pytest_cache/
+.vscode/
+tests/
+mockup/
+Cody_Research_Document.html
+Cody_Research_Document.pdf
+Cody_Ship_Guide_v1.pdf
